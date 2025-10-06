@@ -1,0 +1,123 @@
+# Name: Build LGL Mod Menu (Pro Max Edition)
+# Features:
+# - Caching for significantly faster subsequent builds.
+# - Concurrency control to cancel old runs and build only the latest commit.
+# - A final packaging job to combine 32-bit and 64-bit libraries into one zip file.
+# - Smart artifact naming (e.g., ModMenu-main-run123.zip).
+
+name: Build LGL Mod Menu (Pro Max)
+
+# --- CONCURRENCY CONTROL ---
+# Cancels any previously running workflows in the same branch when a new commit is pushed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      architecture:
+        type: choice
+        description: 'Choose which architecture(s) to build'
+        required: true
+        default: '64-bit (arm64-v8a)'
+        options:
+        - '64-bit (arm64-v8a)'
+        - '32-bit (armeabi-v7a)'
+        - 'Both'
+
+jobs:
+  # JOB 1: Build the C++ libraries for each architecture in parallel.
+  build:
+    name: Build for ${{ matrix.arch.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch:
+          - { name: "ARM64 (64-bit)", command: "arm64", folder: "arm64-v8a" }
+          - { name: "ARMv7 (32-bit)", command: "armv7", folder: "armeabi-v7a" }
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+      
+      # --- CACHING STEP ---
+      # Caches the 'libs' and 'obj' directories to speed up future builds.
+      - name: Cache build directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            libs
+            obj
+          key: ${{ runner.os }}-${{ matrix.arch.command }}-${{ hashFiles('**/CMakeLists.txt', 'jni/**/*.cpp', 'jni/**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch.command }}-
+
+      - name: Make build script executable
+        run: chmod +x ./build.sh
+
+      # This conditional 'if' block determines which architectures to build based on the manual trigger.
+      - name: Compile the mod library
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.architecture == 'Both' ||
+          (github.event.inputs.architecture == '64-bit (arm64-v8a)' && matrix.arch.command == 'arm64') ||
+          (github.event.inputs.architecture == '32-bit (armeabi-v7a)' && matrix.arch.command == 'armv7')
+        run: ./build.sh ${{ matrix.arch.command }}
+
+      # Uploads each compiled library as a temporary artifact for the next job.
+      - name: Upload intermediate artifact
+        if: success() # Only run if compile step was successful and ran
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-library-${{ matrix.arch.command }}
+          path: libs/${{ matrix.arch.folder }}/libil2cpp.so
+          if-no-files-found: error
+
+  # JOB 2: Package the final release zip. This job only runs after ALL build jobs are successful.
+  package-release:
+    name: Package Release
+    # This job depends on the 'build' job completing successfully.
+    needs: build
+    # Only run this job for pushes to the main branch to create a clean release package.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Download all the artifacts (.so files) that were built in the previous job.
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Step 2: Prepare, organize, and zip the final package.
+      - name: Create final release package
+        run: |
+          # Create a clean directory structure for the zip file.
+          mkdir -p release/libs/arm64-v8a
+          mkdir -p release/libs/armeabi-v7a
+          
+          # Move the downloaded libraries into the correct folders.
+          mv artifacts/mod-library-arm64/libil2cpp.so release/libs/arm64-v8a/
+          mv artifacts/mod-library-armv7/libil2cpp.so release/libs/armeabi-v7a/
+          
+          # Create the final zip file with a smart name.
+          zip -r ModMenu-${{ github.ref_name }}-${{ github.run_number }}.zip release
+
+      # Step 3: Upload the single, combined zip file as the final artifact.
+      - name: Upload final release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModMenu-${{ github.ref_name }}-${{ github.run_number }}
+          path: ModMenu-*.zip
