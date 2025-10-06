@@ -1,0 +1,66 @@
+# Name: Build Android APK (Pro Max Edition)
+# Features:
+# - Caching for Gradle dependencies for significantly faster builds.
+# - Concurrency control to cancel old runs.
+# - Proper Java and Gradle setup.
+# - Builds and uploads the final Release APK.
+
+name: Build Android APK v1
+
+# --- CONCURRENCY CONTROL ---
+# Cancels any previously running workflows in the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checks out your repository code.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Java Development Kit (JDK). Gradle needs Java to run.
+      # Most modern Android projects use JDK 17.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Step 3: Setup Gradle
+      # This powerful action handles caching of Gradle dependencies,
+      # which makes future builds much faster.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # Step 4: Make the Gradle Wrapper script executable.
+      # This is a good practice to prevent permission errors.
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Step 5: Build the Release APK.
+      # This is the main command that compiles your Java/Kotlin and C++ code
+      # and packages it into a final, signed APK.
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      # Step 6: Upload the generated APK as an artifact.
+      # This makes the final APK available for download from the workflow summary page.
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          # !!! IMPORTANT: This path is the standard for Android projects. !!!
+          # Verify it's correct for your specific project structure.
+          path: app/build/outputs/apk/release/app-release.apk
