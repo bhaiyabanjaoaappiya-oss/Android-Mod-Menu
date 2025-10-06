@@ -1,0 +1,87 @@
+# Name of your GitHub Actions workflow.
+# Name of your GitHub Actions workflow.
+name: Build LGL Mod Menu
+
+# Controls when the workflow will run.
+on:
+  # Triggers on push/pull_request, will build BOTH architectures.
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+  # Allows you to run this workflow manually from the Actions tab.
+  workflow_dispatch:
+    # Adds input fields to the manual trigger screen.
+    inputs:
+      architecture:
+        type: choice
+        description: 'Choose which architecture(s) to build'
+        required: true
+        default: '64-bit (arm64-v8a)'
+        options:
+        - '64-bit (arm64-v8a)'
+        - '32-bit (armeabi-v7a)'
+        - 'Both'
+
+jobs:
+  build:
+    # The job name is dynamic based on the architecture being built.
+    name: Build for ${{ matrix.arch.name }}
+    
+    # The runner environment.
+    runs-on: ubuntu-latest
+
+    # This matrix strategy sets up parallel jobs for both 32-bit and 64-bit.
+    # The 'if' condition on the steps below will decide which ones actually run.
+    strategy:
+      matrix:
+        arch:
+          - { name: "ARM64 (64-bit)", command: "arm64", folder: "arm64-v8a" }
+          - { name: "ARMv7 (32-bit)", command: "armv7", folder: "armeabi-v7a" }
+
+    steps:
+      # Step 1: Checkout repository and submodules.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      # Step 2: Set up the Android NDK.
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r25c
+
+      # Step 3: Make the build script executable.
+      - name: Make build script executable
+        run: chmod +x build.sh
+
+      # Step 4: Compile the mod library (This step is conditional).
+      - name: Compile the mod library
+        # This 'if' block is the core logic. It runs the step if:
+        # 1. The workflow was NOT triggered manually (e.g., by a push), OR
+        # 2. The user selected "Both", OR
+        # 3. The user's selection matches the current job in the matrix.
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.architecture == 'Both' ||
+          (github.event.inputs.architecture == '64-bit (arm64-v8a)' && matrix.arch.command == 'arm64') ||
+          (github.event.inputs.architecture == '32-bit (armeabi-v7a)' && matrix.arch.command == 'armv7')
+        run: ./build.sh ${{ matrix.arch.command }}
+
+      # Step 5: Upload the compiled artifact (Also conditional).
+      - name: Upload Artifact
+        # This uses the same logic as the compile step to ensure we only upload what was built.
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.architecture == 'Both' ||
+          (github.event.inputs.architecture == '64-bit (arm64-v8a)' && matrix.arch.command == 'arm64') ||
+          (github.event.inputs.architecture == '32-bit (armeabi-v7a)' && matrix.arch.command == 'armv7')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-library-${{ matrix.arch.command }}
+          path: libs/${{ matrix.arch.folder }}/libil2cpp.so
+          # If the file is not found (because the step was skipped), don't fail the workflow.
+          if-no-files-found: ignore
